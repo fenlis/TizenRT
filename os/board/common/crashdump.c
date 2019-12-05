@@ -157,7 +157,9 @@ static int ramdump_via_uart(void)
 		}
 	}
 
-	lldbg(" Successfull\n");
+	/* Send external RAM handshake to the HOST, 1 if present else 0 */
+	up_lowputc('0');
+
 	return OK;
 }
 #endif
