@@ -157,8 +157,60 @@ static int ramdump_via_uart(void)
 		}
 	}
 
+#if defined(CONFIG_IMXRT_SEMC_SDRAM)
+	/* Send external RAM handshake to the HOST, 1 if present else 0 */
+	up_lowputc('1');
+
+	host_buf[HANDSHAKE_STR_LEN_MAX] = "";
+	/* Receive hanshake string from HOST */
+	do {
+		host_buf[0] = up_getc();
+	} while (host_buf[0] != target_str[0]);
+
+	for (i = 1; i < strlen(target_str);) {
+		if ((ch = up_getc()) != -1) {
+			host_buf[i] = ch;
+			i++;
+		}
+	}
+
+	if (strncmp(host_buf, target_str, strlen(target_str)) != 0) {
+		/* Send NAK */
+		up_lowputc('N');
+	}
+
+	/* Send ACK */
+	up_lowputc('A');
+
+	void *mem_address = CONFIG_IMXRT_SDRAM_START;
+	uint32_t mem_size = CONFIG_IMXRT_SDRAM_SIZE;
+
+	/* Send external RAM address */
+	ptr = (uint8_t *)&mem_address;
+	for (i = 0; i < sizeof(mem_address); i++) {
+		up_lowputc((uint8_t)*ptr);
+		ptr++;
+	}
+
+	/* Send external RAM size */
+	ptr = (uint8_t *)&mem_size;
+	for (i = 0; i < sizeof(mem_size); i++) {
+		up_lowputc((uint8_t)*ptr);
+		ptr++;
+	}
+
+	/* Send RAMDUMP of size bytes */
+	ptr = (uint8_t *)mem_address;
+	size = mem_size;
+	while (size) {
+		up_lowputc((uint8_t)*ptr);
+		ptr++;
+		size--;
+	}
+#else
 	/* Send external RAM handshake to the HOST, 1 if present else 0 */
 	up_lowputc('0');
+#endif
 
 	return OK;
 }

@@ -289,7 +289,96 @@ scan_input:
 		}
 	}
 	return 0;
+}
 
+int extramdump_recv(int dev_fd)
+{
+	int ret;
+	int count = 0;
+	char buf;
+	uint32_t mem_address;
+	uint32_t mem_size;
+	uint32_t ramdump_size;
+	char bin_file[BINFILE_NAME_SIZE] = { '\0' };
+	FILE *bin_fp;
+
+	int external_ram;
+
+	/* Take user's input if external RAM needs to be dumped or not */
+	printf("\nPlease enter 1/0 if you need external RAM dump (1: yes, 0: no): ");
+	scanf("%d", &external_ram);
+
+	if (external_ram != 1) {
+		printf("\nNo external ramdump requested, Exiting...\n");
+		return 0;
+	}
+
+	if (do_handshake(dev_fd) != 0) {
+		printf("Target Handshake Failed\n");
+		return 0;
+	}
+
+	printf("\nDumping external RAM ...\n");
+
+	/* Receive memory address & size for memory regions from TARGET */
+	ret = b_read(dev_fd, (uint8_t *)&mem_address, 4);
+	if (ret != 4) {
+		printf("Receiving address failed, ret = %d\n", ret);
+		return -1;
+	}
+
+	ret = b_read(dev_fd, (uint8_t *)&mem_size, 4);
+	if (ret != 4) {
+		printf("Receiving size failed, ret = %d\n", ret);
+		return -1;
+	}
+
+	snprintf(bin_file, BINFILE_NAME_SIZE, "ramdump_0x%08x_0x%08x.bin",  mem_address, (mem_address +  mem_size));
+	/* Display external RAM region options address & size */
+	printf("\n=========================================================================\n");
+	printf("Dumping external RAM data, Address: 0x%08x, Size: %dbytes\n",  mem_address, mem_size);
+	printf("=========================================================================\n");
+
+	bin_fp = fopen(bin_file, "w");
+	if (bin_fp == NULL) {
+		printf("%s create failed\n", bin_file);
+		return -1;
+	}
+
+	printf("[>");
+	fflush(stdout);
+
+	/* Dump external RAM data*/
+	ramdump_size =  mem_size;
+	while (ramdump_size) {
+		ret = read(dev_fd, &buf, 1);
+		if (ret != 1) {
+			printf("Receiving external ramdump %dTH byte failed, ret = %d\n", count, ret);
+			fclose(bin_fp);
+			return -1;
+		}
+
+		ret = fwrite(&buf, 1, 1, bin_fp);
+		if (ret != 1) {
+			printf("Writing external ramdump %dTH byte failed, ret = %d\n", count, ret);
+			fclose(bin_fp);
+			return -1;
+		}
+
+		count++;
+		ramdump_size--;
+
+		if ((count % (KB_CHECK_COUNT)) == 0) {
+			printf("\b=>");
+			fflush(stdout);
+		}
+	}
+	printf("]\n");
+	fclose(bin_fp);
+
+	printf("External Ramdump received successfully..!\n");
+
+	return 0;
 }
 
 static int configure_tty(int tty_fd)
@@ -334,6 +423,7 @@ int main(int argc, char *argv[])
 	int ret;
 	int dev_fd;
 	int dev_lock_fd;
+	char c;
 	char *dev_file;
 	char tty_path[TTYPATH_LEN] = {0, };
 	char tty_type[TTYTYPE_LEN] = {0, };
@@ -361,7 +451,6 @@ int main(int argc, char *argv[])
 
 	/* Compose tty path  */
 	snprintf(tty_path, TTYPATH_LEN, "/var/lock/LCK..%s", tty_type);
-
 	if (access(tty_path, F_OK) == 0) {
 		printf("Error : couldnt lock serial port device %s\n", dev_file);
 		printf("Please close any other process using this port first\n");
@@ -400,9 +489,28 @@ int main(int argc, char *argv[])
 		goto ramdump_err;
 	}
 
-	printf("Ramdump received successfully..!\n");
-	ret = 0;
+	printf("Internal Ramdump received successfully..!\n\n");
 
+	/* Check if external RAM exists or not from TARGET */
+	ret = read(dev_fd, &c, 1);
+	if (ret != 1) {
+		printf("Receiving handshake failed, ret = %d\n", ret);
+		goto init_err;
+	}
+
+	if (c != '1') {
+		/* External RAM doesn't exist, exit without prompt */
+		ret = 0;
+		goto init_err;
+	}
+
+	/* External RAM exists, check if user wants the dump */
+	if (extramdump_recv(dev_fd) != 0) {
+		printf("External ramdump failed\n");
+		goto init_err;
+	}
+
+	ret = 0;
 init_err:
 	free(mem_info);
 ramdump_err:
